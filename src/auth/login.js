@@ -14,39 +14,61 @@ async function login(page) {
   }
 
   console.log('Navigating to Onvio login page...');
-  // Regional Onvio URL for Argentina
-  await page.goto('https://onvio.com.ar/');
+  await page.goto('https://onvio.com.ar/#/', { timeout: 60000 });
 
-  // Initial redirect usually takes us to the login page
-  // We'll wait for the email/username input
-  await page.waitForSelector('input[name="username"], input[type="email"]');
-  await page.fill('input[name="username"], input[type="email"]', user);
-  await page.click('button[type="submit"], #next-btn, .btn-primary');
+  // Click initial 'Iniciar sesión' button on the homepage
+  const loginStartBtn = page.getByRole('button', { name: 'Iniciar sesión' }).first();
+  try {
+    await loginStartBtn.waitFor({ state: 'visible', timeout: 15000 });
+    await loginStartBtn.click();
+  } catch (e) {
+    console.log('No "Iniciar sesión" button found, proceeding directly...');
+  }
 
-  // Wait for password field
-  await page.waitForSelector('input[name="password"], input[type="password"]');
-  await page.fill('input[name="password"], input[type="password"]', pass);
-  await page.click('button[type="submit"], #login-btn, .btn-primary');
+  console.log('Waiting for Email or Password input...');
+  const emailInput = page.getByRole('textbox', { name: 'Correo electrónico' });
+  const passInput = page.getByRole('textbox', { name: 'Contraseña' });
+  
+  // Wait for either the email input or the password input to become visible
+  try {
+    await Promise.any([
+      emailInput.waitFor({ state: 'visible', timeout: 30000 }),
+      passInput.waitFor({ state: 'visible', timeout: 30000 })
+    ]);
+  } catch (e) {
+    console.log('Timeout waiting for login inputs. Proceeding anyway...');
+  }
+
+  if (await emailInput.isVisible()) {
+    console.log('Entering email...');
+    await emailInput.fill(user);
+    await page.getByRole('button', { name: 'Iniciar sesión' }).click();
+    await passInput.waitFor({ state: 'visible', timeout: 15000 });
+  }
+
+  if (await passInput.isVisible()) {
+    console.log('Entering password...');
+    await passInput.click();
+    await passInput.fill(pass);
+    await page.getByRole('button', { name: 'Iniciar sesión' }).click();
+  }
 
   // MFA CHECK: Onvio usually asks for a code
-  // We'll wait to see if the MFA screen appears
   console.log('Checking for MFA / Security Code screen...');
   
-  // If the MFA screen appears, we pause to let the user enter it
-  // This is where you manually enter the code and then click Resume in Playwright Inspector
   try {
-    // Look for common MFA indicators like "Security Code" or "Código de Seguridad"
-    await page.waitForSelector('input[name="code"], .mfa-input, text=Código de Seguridad', { timeout: 10000 });
-    console.log('MFA detected. Please enter the code in the browser and then resume the script.');
-    await page.pause();
+    // Look for common MFA indicators
+    const mfaInput = page.locator('input[name="code"], .mfa-input, input[id*="code"]').first();
+    if (await mfaInput.isVisible({ timeout: 10000 })) {
+        console.log('MFA detected. Awaiting manual intervention if needed, but in CI we hope it is not required or handled via session.');
+    }
   } catch (e) {
-    console.log('MFA screen not detected within 10s, proceeding...');
+    console.log('MFA screen not detected or timed out, proceeding...');
   }
 
   // After MFA or if none, wait for the dashboard or staff page
   console.log('Waiting for the Dashboard or Staff page to load...');
-  // We'll wait for common indicators of success in Onvio
-  await page.waitForURL(/.*(dashboard|staff).*/i, { timeout: 60000 });
+  await page.waitForURL(/.*(dashboard|staff).*/i, { timeout: 90000 });
   
   // Wait a bit for the page to settle
   await page.waitForLoadState('networkidle');

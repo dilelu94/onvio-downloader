@@ -70,6 +70,7 @@ class EstudioOneDownloader {
   async downloadPlanillaPDF(month, year, downloadDir, companyName) {
     console.log(`[PDF] Planilla ${month}/${year}`);
     const page = this.estudioPage;
+    const context = page.context();
 
     const navigate = async () => {
       await page.getByRole('heading', { name: ' Reportes' }).click();
@@ -85,23 +86,47 @@ class EstudioOneDownloader {
 
     await this.prepareParams(month, year, true);
 
-    console.log('Clicking Emitir...');
-    const dlPromise = page.waitForEvent('download', { timeout: 60000 });
-    await page.getByRole('button', { name: 'Emitir' }).click();
-    await page.waitForTimeout(10000);
-
-    try {
-      await page.locator('.iFramePpal').contentFrame().getByRole('menuitem', { name: 'Imprimir' }).click({ timeout: 10000 });
-    } catch (e) {
-      const frames = page.frames();
-      for (const f of frames) {
-        try { await f.getByRole('menuitem', { name: 'Imprimir' }).click({ timeout: 2000 }); break; } catch(err) {}
+    console.log('Clicking Emitir and intercepting network for PDF data...');
+    
+    // Channel: Network Interception (Bulletproof for headless)
+    let pdfBuffer = null;
+    const onResponse = async (response) => {
+      const url = response.url();
+      const contentType = response.headers()['content-type'] || '';
+      
+      // Look for PDF content or common Onvio report endpoints
+      if (contentType.includes('application/pdf') || url.toLowerCase().includes('report') || url.includes('export')) {
+        try {
+          const buffer = await response.body();
+          // Minimal PDF signature check
+          if (buffer.length > 100 && buffer.slice(0, 4).toString() === '%PDF') {
+            console.log(`[NETWORK] Captured PDF from: ${url} (${buffer.length} bytes)`);
+            pdfBuffer = buffer;
+          }
+        } catch(e) {}
       }
+    };
+
+    page.on('response', onResponse);
+
+    await page.getByRole('button', { name: 'Emitir' }).click();
+
+    console.log('Waiting for network capture...');
+    const globalTimeout = Date.now() + 60000;
+    while (Date.now() < globalTimeout && !pdfBuffer) {
+      await page.waitForTimeout(2000);
     }
 
-    const download = await dlPromise;
-    await download.saveAs(path.join(downloadDir, `Planilla de Totales Generales.pdf`));
-    console.log(`[SUCCESS] PDF saved.`);
+    page.removeListener('response', onResponse);
+
+    if (pdfBuffer) {
+      const targetPath = path.join(downloadDir, `Planilla de Totales Generales.pdf`);
+      fs.writeFileSync(targetPath, pdfBuffer);
+      console.log(`[SUCCESS] PDF saved via Network Interception: ${targetPath}`);
+      return;
+    }
+
+    throw new Error('Could not capture the PDF via network interception.');
   }
 
   async downloadInformeExcel(month, year, downloadDir, companyName) {
